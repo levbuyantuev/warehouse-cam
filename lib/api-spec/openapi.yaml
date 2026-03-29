@@ -1,0 +1,181 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: warehouse
+    description: Warehouse photo operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /warehouse/photo:
+    post:
+      operationId: uploadPhoto
+      tags: [warehouse]
+      summary: Upload photo for article
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [article, photo]
+              properties:
+                article:
+                  type: string
+                  description: Article number (folder name on Yandex Disk)
+                photo:
+                  type: string
+                  format: binary
+                  description: Photo file
+      responses:
+        "200":
+          description: Upload successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadResult"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+        "500":
+          description: Upload failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+
+  /warehouse/catalog:
+    get:
+      operationId: getCatalog
+      tags: [warehouse]
+      summary: List all article folders in the Avito directory
+      responses:
+        "200":
+          description: Catalog list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogResult"
+        "500":
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+
+  /warehouse/photos/{article}:
+    get:
+      operationId: getArticlePhotos
+      tags: [warehouse]
+      summary: Get existing photos for article
+      parameters:
+        - name: article
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Photos list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PhotosList"
+        "500":
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+
+    UploadResult:
+      type: object
+      required: [success, filename, publicUrl]
+      properties:
+        success:
+          type: boolean
+        filename:
+          type: string
+        publicUrl:
+          type: string
+
+    PhotosList:
+      type: object
+      required: [article, photos]
+      properties:
+        article:
+          type: string
+        photos:
+          type: array
+          items:
+            $ref: "#/components/schemas/PhotoItem"
+
+    PhotoItem:
+      type: object
+      required: [name, publicUrl, previewProxyUrl]
+      properties:
+        name:
+          type: string
+        publicUrl:
+          type: string
+        previewProxyUrl:
+          type: string
+          description: Proxied preview URL served by our backend for displaying in img tags
+
+    CatalogResult:
+      type: object
+      required: [folders]
+      properties:
+        folders:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogFolder"
+
+    CatalogFolder:
+      type: object
+      required: [article, photoCount, coverProxyUrl]
+      properties:
+        article:
+          type: string
+        photoCount:
+          type: integer
+        coverProxyUrl:
+          type: string
+          description: Proxied URL of the first photo for use as thumbnail
+
+    ErrorResult:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string

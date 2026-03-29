@@ -1,0 +1,15 @@
+packages:
+  "framer-motion": "For buttery smooth mobile page transitions and premium app feel"
+  "clsx": "Utility for constructing className strings conditionally"
+  "tailwind-merge": "Utility function to efficiently merge Tailwind CSS classes"
+  "@radix-ui/react-slot": "For Button component asChild prop"
+
+images:
+  - path: "artifacts/warehouse-cam/public/images/industrial-bg.png"
+    description: "Subtle abstract industrial pattern, deep slate grays with very soft ambient safety orange glows, dark minimal texture, perfect for background"
+    aspect_ratio: "9:16"
+
+notes:
+  - "Importing API hooks directly from @workspace/api-client-react as instructed"
+  - "Using <input capture='environment'> for direct rear-camera access on mobile"
+  - "App is optimized for mobile portrait orientation"

@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Импорт Яндекс.Диск</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { 
+        font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif; 
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 20px;
+      }
+      .container { 
+        max-width: 700px; 
+        margin: 0 auto; 
+        background: white; 
+        border-radius: 16px; 
+        box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        overflow: hidden;
+      }
+      .header {
+        background: linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%);
+        color: white;
+        padding: 30px;
+        text-align: center;
+      }
+      .header h1 { font-size: 28px; margin-bottom: 10px; }
+      .header p { opacity: 0.9; }
+      .content { padding: 30px; }
+      
+      .stats-grid { 
+        display: grid; 
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); 
+        gap: 15px; 
+        margin-bottom: 30px;
+      }
+      .stat-card { 
+        background: #f8f9fa; 
+        padding: 20px; 
+        border-radius: 12px; 
+        text-align: center;
+        border: 2px solid #e9ecef;
+        transition: transform 0.2s;
+      }
+      .stat-card:hover { transform: translateY(-3px); }
+      .stat-value { 
+        font-size: 32px; 
+        font-weight: bold; 
+        color: #1a73e8; 
+        margin-bottom: 5px;
+      }
+      .stat-label { font-size: 13px; color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; }
+      
+      .btn {
+        display: block;
+        width: 100%;
+        padding: 18px;
+        background: linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%);
+        color: white;
+        border: none;
+        border-radius: 12px;
+        font-size: 18px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        margin-bottom: 20px;
+      }
+      .btn:hover { 
+        transform: translateY(-2px); 
+        box-shadow: 0 5px 20px rgba(26,115,232,0.4);
+      }
+      .btn:disabled { 
+        background: #ccc; 
+        cursor: not-allowed; 
+        transform: none;
+        box-shadow: none;
+      }
+      .btn-secondary {
+        background: #6c757d;
+        margin-top: 10px;
+      }
+      
+      .progress-container { 
+        background: #e9ecef; 
+        border-radius: 10px; 
+        height: 25px; 
+        overflow: hidden; 
+        margin: 20px 0;
+        display: none;
+      }
+      .progress-bar { 
+        background: linear-gradient(90deg, #1a73e8, #00d4ff); 
+        height: 100%; 
+        width: 0%; 
+        transition: width 0.5s;
+        border-radius: 10px;
+      }
+      
+      .status-message {
+        padding: 15px;
+        border-radius: 8px;
+        margin: 15px 0;
+        font-weight: 500;
+      }
+      .status-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+      .status-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+      .status-info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+      
+      .settings { 
+        background: #f8f9fa; 
+        padding: 20px; 
+        border-radius: 12px; 
+        margin-top: 20px;
+      }
+      .settings h3 { margin-bottom: 15px; color: #495057; }
+      .setting-item { margin-bottom: 15px; }
+      .setting-item label { display: block; margin-bottom: 8px; color: #495057; font-weight: 500; }
+      .setting-item input[type="checkbox"] { margin-right: 8px; transform: scale(1.2); }
+      .setting-item input[type="number"] { 
+        width: 100%; 
+        padding: 10px; 
+        border: 2px solid #dee2e6; 
+        border-radius: 8px; 
+        font-size: 16px;
+      }
+      
+      .footer { 
+        text-align: center; 
+        padding: 20px; 
+        color: #6c757d; 
+        font-size: 13px; 
+        border-top: 1px solid #e9ecef;
+      }
+      
+      .loading { 
+        display: inline-block; 
+        width: 20px; 
+        height: 20px; 
+        border: 3px solid rgba(255,255,255,0.3); 
+        border-radius: 50%; 
+        border-top-color: white; 
+        animation: spin 1s ease-in-out infinite;
+        margin-right: 10px;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>📦 Импорт Яндекс.Диск</h1>
+        <p>Автоматическое получение ссылок на фотографии</p>
+      </div>
+      
+      <div class="content">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" id="totalFolders">0</div>
+            <div class="stat-label">📁 Всего папок</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="successCount">0</div>
+            <div class="stat-label">✅ Успешно</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="errorCount">0</div>
+            <div class="stat-label">❌ Ошибки</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="successRate">0%</div>
+            <div class="stat-label">📊 Успех</div>
+          </div>
+        </div>
+        
+        <button id="runBtn" class="btn" onclick="startProcessing()">
+          ▶ Запустить обработку
+        </button>
+        
+        <div class="progress-container" id="progressContainer">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+        
+        <div id="statusMessage"></div>
+        
+        <div class="settings">
+          <h3>⚙️ Настройки</h3>
+          <div class="setting-item">
+            <label>
+              <input type="checkbox" id="useCache" checked> 
+              Использовать кэш (пропускать обработанные)
+            </label>
+          </div>
+          <div class="setting-item">
+            <label>Задержка между запросами (мс):</label>
+            <input type="number" id="requestDelay" value="1000" min="500" max="5000" step="500">
+          </div>
+          <button class="btn btn-secondary" onclick="clearCache()">🗑️ Очистить кэш</button>
+          <button class="btn btn-secondary" onclick="refreshStats()">🔄 Обновить статистику</button>
+        </div>
+      </div>
+      
+      <div class="footer">
+        <p>Последний запуск: <span id="lastRun">Никогда</span></p>
+        <p style="margin-top: 10px;">Google Apps Script • Яндекс.Диск API</p>
+      </div>
+    </div>
+
+    <script>
+      // Загрузка статистики при открытии
+      window.onload = function() {
+        loadStats();
+      };
+      
+      function loadStats() {
+        google.script.run
+          .withSuccessHandler(updateStats)
+          .withFailureHandler(showError)
+          .getProcessingStats();
+      }
+      
+      function updateStats(stats) {
+        document.getElementById('totalFolders').textContent = stats.total || 0;
+        document.getElementById('successCount').textContent = stats.successCount || 0;
+        document.getElementById('errorCount').textContent = stats.errorCount || 0;
+        document.getElementById('successRate').textContent = (stats.successRate || 0) + '%';
+        document.getElementById('lastRun').textContent = stats.lastRun || 'Никогда';
+      }
+      
+      function startProcessing() {
+        const btn = document.getElementById('runBtn');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const statusMessage = document.getElementById('statusMessage');
+        
+        btn.disabled = true;
+        btn.innerHTML = '<span class="loading"></span> Обработка...';
+        progressContainer.style.display = 'block';
+        progressBar.style.width = '30%';
+        statusMessage.innerHTML = '';
+        
+        const useCache = document.getElementById('useCache').checked;
+        const requestDelay = parseInt(document.getElementById('requestDelay').value) || 1000;
+        
+        google.script.run
+          .withSuccessHandler(function(result) {
+            btn.disabled = false;
+            btn.innerHTML = '▶ Запустить обработку';
+            progressBar.style.width = '100%';
+            statusMessage.innerHTML = `<div class="status-message status-success">${result}</div>`;
+            setTimeout(() => { progressContainer.style.display = 'none'; }, 3000);
+            loadStats();
+          })
+          .withFailureHandler(function(error) {
+            btn.disabled = false;
+            btn.innerHTML = '▶ Запустить обработку';
+            progressContainer.style.display = 'none';
+            statusMessage.innerHTML = `<div class="status-message status-error">❌ Ошибка: ${error.message}</div>`;
+          })
+          .processAllFolders(useCache, requestDelay);
+      }
+      
+      function clearCache() {
+        google.script.run
+          .withSuccessHandler(function(result) {
+            alert(result);
+            loadStats();
+          })
+          .withFailureHandler(showError)
+          .clearCache();
+      }
+      
+      function refreshStats() {
+        loadStats();
+        const statusMessage = document.getElementById('statusMessage');
+        statusMessage.innerHTML = '<div class="status-message status-info">🔄 Статистика обновлена</div>';
+        setTimeout(() => { statusMessage.innerHTML = ''; }, 2000);
+      }
+      
+      function showError(error) {
+        alert('❌ Ошибка: ' + error.message);
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Фото для склада"
+version = "1.0.0"
+id = "artifacts/warehouse-cam"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21998
+
+[services.development]
+run = "pnpm --filter @workspace/warehouse-cam run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/warehouse-cam", "run", "build" ]
+publicDir = "artifacts/warehouse-cam/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21998"
+BASE_PATH = "/"

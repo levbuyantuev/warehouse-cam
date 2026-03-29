@@ -1,0 +1,99 @@
+// ✅ Глобальные настройки
+const CONFIG = {
+  sheetName: "Лист1",
+  articleColumn: 2,
+  resultColumn: 4,
+  startRow: 3,
+  yandexBaseFolder: "Avito",
+  requestDelay: 1000,
+};
+
+// ✅ Главная страница веб-приложения
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile('Index')
+    .setTitle('Импорт Яндекс.Диск')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+// ✅ Запуск обработки из веб-интерфейса
+function processAllFolders(useCache = true, requestDelay = 1000) {
+  const yandexToken = PropertiesService.getScriptProperties().getProperty('yandexToken');
+  
+  if (!yandexToken) {
+    throw new Error('❌ Токен Яндекс.Диска не настроен! Добавьте в Свойства скрипта.');
+  }
+
+  const cache = useCache ? CacheService.getUserCache() : null;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.sheetName);
+  
+  if (!sheet) throw new Error(`Лист '${CONFIG.sheetName}' не найден`);
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < CONFIG.startRow) return "Нет данных для обработки";
+  
+  const data = sheet.getRange(`${CONFIG.startRow}:${lastRow}`).getValues();
+  const results = [];
+  let successCount = 0;
+  let totalCount = 0;
+  let errorCount = 0;
+  
+  data.forEach((row, index) => {
+    const article = row[CONFIG.articleColumn - 1];
+    
+    if (!article) {
+      results.push(["Нет артикула"]);
+      return;
+    }
+    
+    totalCount++;
+    
+    // Проверка кэша
+    if (cache) {
+      const cacheKey = `yandex_${article}`;
+      const cached = cache.get(cacheKey);
+      if (cached) {
+        results.push([cached]);
+        if (!cached.startsWith("Ошибка")) successCount++;
+        else errorCount++;
+        return;
+      }
+    }
+    
+    try {
+      const fullPath = `${CONFIG.yandexBaseFolder}/${article}`;
+      const encodedPath = encodeURIComponent(fullPath);
+      
+      const response = UrlFetchApp.fetch(
+        `https://cloud-api.yandex.net/v1/disk/resources?path=${encodedPath}`,
+        {
+          headers: { "Authorization": "OAuth " + yandexToken },
+          muteHttpExceptions: true
+        }
+      );
+
+      const responseData = JSON.parse(response.getContentText());
+      let links = [];
+
+      if (response.getResponseCode() === 200 && responseData._embedded?.items) {
+        links = responseData._embedded.items
+          .filter(item => item.type === "file")
+          .map(file => file.public_url || file.file);
+      }
+      
+      const result = links.length > 0 ? links.join(" ") : "Папка пуста";
+      results.push([result]);
+      
+      if (!result.startsWith("Ошибка")) successCount++;
+      else errorCount++;
+      
+      if (cache) {
+        cache.put(`yandex_${article}`, result, 86400);
+      }
+      
+    } catch (e) {
+      const errorMsg = `Ошибка: ${e.message}`;
+      results.push([errorMsg]);
+      errorCount++;
+      
