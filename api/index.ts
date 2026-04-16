@@ -182,28 +182,69 @@ app.get("/api/warehouse/photos/:article", async (req: Request, res: Response) =>
 });
 
 app.get("/api/warehouse/photo-proxy", async (req: Request, res: Response) => {
+  const rawPath = req.query.path;
+  const path = (rawPath || "").toString();
+
+  console.log("[photo-proxy] rawPath:", rawPath, "| decoded path:", path);
+
   try {
     const token = getToken();
-    const path = (req.query.path || "").toString();
-    if (!path) { res.status(400).json({ error: "path query param is required" }); return; }
 
-    const infoRes = await fetch(
-      `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(path)}&fields=file,mime_type`,
-      { headers: { Authorization: `OAuth ${token}` } }
-    );
-    if (!infoRes.ok) { res.status(404).json({ error: "File not found" }); return; }
-    const info = await infoRes.json() as { file?: string; mime_type?: string };
-    if (!info.file) { res.status(404).json({ error: "No download URL available" }); return; }
+    if (!path) {
+      res.status(400).json({ error: "path query param is required" });
+      return;
+    }
 
-    const imgRes = await fetch(info.file);
-    if (!imgRes.ok) { res.status(502).json({ error: "Failed to fetch image from Yandex" }); return; }
+    // Use /resources/download – the correct Yandex Disk API endpoint for download URLs.
+    // /resources?fields=file does not reliably return the `file` field for all file states.
+    const yadEncoded = encodeURIComponent(path);
+    const downloadApiUrl = `https://cloud-api.yandex.net/v1/disk/resources/download?path=${yadEncoded}`;
 
-    res.setHeader("Content-Type", info.mime_type || imgRes.headers.get("content-type") || "image/jpeg");
-    res.setHeader("Cache-Control", "no-store");
+    console.log("[photo-proxy] Yandex API URL:", downloadApiUrl);
+
+    const dlRes = await fetch(downloadApiUrl, {
+      headers: { Authorization: `OAuth ${token}` },
+    });
+
+    console.log("[photo-proxy] Yandex status:", dlRes.status);
+
+    if (!dlRes.ok) {
+      const errBody = await dlRes.text();
+      console.error("[photo-proxy] Yandex error:", dlRes.status, errBody, "| path:", path);
+      res.status(dlRes.status === 404 ? 404 : 502).json({
+        error: "Yandex Disk error",
+        yandexStatus: dlRes.status,
+        path,
+        detail: errBody,
+      });
+      return;
+    }
+
+    const dlData = await dlRes.json() as { href?: string };
+    const downloadUrl = dlData.href;
+
+    console.log("[photo-proxy] download href:", downloadUrl?.slice(0, 80));
+
+    if (!downloadUrl) {
+      console.error("[photo-proxy] no href in Yandex response | path:", path, dlData);
+      res.status(502).json({ error: "No download href from Yandex", path });
+      return;
+    }
+
+    const imgRes = await fetch(downloadUrl);
+    if (!imgRes.ok) {
+      console.error("[photo-proxy] image fetch failed:", imgRes.status);
+      res.status(502).json({ error: "Failed to fetch image from Yandex storage", status: imgRes.status });
+      return;
+    }
+
+    const contentType = imgRes.headers.get("content-type") || "image/jpeg";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "public, max-age=3600");
     res.end(Buffer.from(await imgRes.arrayBuffer()));
   } catch (err) {
-    console.error("Photo proxy error:", err);
-    res.status(500).json({ error: err instanceof Error ? err.message : "Proxy failed" });
+    console.error("[photo-proxy] exception:", err, "| path:", path);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Proxy failed", path });
   }
 });
 
