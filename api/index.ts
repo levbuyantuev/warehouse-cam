@@ -151,7 +151,6 @@ app.get("/api/warehouse/photos/:article", async (req: Request, res: Response) =>
   try {
     const token = getToken();
     const { article } = req.params;
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
     type RawFile = { type: string; name: string; public_url?: string; path: string };
 
     const allFiles: RawFile[] = [];
@@ -170,7 +169,9 @@ app.get("/api/warehouse/photos/:article", async (req: Request, res: Response) =>
       return {
         name: file.name,
         publicUrl,
-        previewProxyUrl: `${baseUrl}/api/warehouse/photo-proxy?path=${encodeURIComponent(file.path)}`,
+        // Relative URL — browser resolves against page origin (Vercel edge terminates TLS,
+        // so req.protocol is "http" — absolute URLs cause Mixed Content on HTTPS pages).
+        previewProxyUrl: `/api/warehouse/photo-proxy?path=${encodeURIComponent(file.path)}`,
       };
     }));
 
