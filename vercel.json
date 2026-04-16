@@ -3,7 +3,7 @@
   "buildCommand": "BASE_PATH=/ PORT=3000 node_modules/.bin/vite build --config artifacts/warehouse-cam/vite.config.ts",
   "outputDirectory": "artifacts/warehouse-cam/dist/public",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/index" }
+    { "source": "/api/:route*", "destination": "/api/index" }
   ],
   "functions": {
     "api/index.ts": {
