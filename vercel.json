@@ -1,6 +1,6 @@
 {
-  "installCommand": "npm install -g pnpm@9.15.0 && pnpm install --no-frozen-lockfile",
-  "buildCommand": "BASE_PATH=/ PORT=3000 pnpm --filter @workspace/warehouse-cam build",
+  "installCommand": "node vercel-install.mjs && npm install --legacy-peer-deps",
+  "buildCommand": "BASE_PATH=/ PORT=3000 node_modules/.bin/vite build --config artifacts/warehouse-cam/vite.config.ts",
   "outputDirectory": "artifacts/warehouse-cam/dist/public",
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api/index" }
