@@ -4,7 +4,7 @@ import multer from "multer";
 const router: IRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
-const BASE_FOLDER = "Avito";
+const BASE_FOLDERS = ["Avito", "Avito2", "ПЕРЕКИД_V1.0"];
 
 function getToken(): string {
   const token = process.env.YANDEX_TOKEN;
@@ -69,6 +69,8 @@ router.post("/warehouse/photo", upload.single("photo"), async (req: Request, res
     const token = getToken();
     const article = (req.body?.article || "").toString().trim();
     const file = req.file;
+    const folderParam = (req.body?.folder || "").toString().trim();
+    const baseFolder = BASE_FOLDERS.includes(folderParam) ? folderParam : BASE_FOLDERS[0];
 
     if (!article) {
       res.status(400).json({ error: "Article number is required" });
@@ -82,14 +84,14 @@ router.post("/warehouse/photo", upload.single("photo"), async (req: Request, res
     const ext = file.originalname.split(".").pop() || "jpg";
     const timestamp = Date.now();
     const filename = `photo_${timestamp}.${ext}`;
-    const filePath = `${BASE_FOLDER}/${article}/${filename}`;
+    const filePath = `${baseFolder}/${article}/${filename}`;
 
-    await createFolderIfNeeded(`${BASE_FOLDER}/${article}`, token);
+    await createFolderIfNeeded(`${baseFolder}/${article}`, token);
     const uploadUrl = await getUploadUrl(filePath, token);
     await uploadToYandex(uploadUrl, file.buffer, file.mimetype);
     const publicUrl = await publishFile(filePath, token);
 
-    res.json({ success: true, filename, publicUrl: publicUrl || "" });
+    res.json({ success: true, filename, publicUrl: publicUrl || "", folder: baseFolder });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Upload failed";
     req.log.error({ err }, "Photo upload error");
@@ -97,58 +99,67 @@ router.post("/warehouse/photo", upload.single("photo"), async (req: Request, res
   }
 });
 
+// In-memory cache for the article list (refreshes every 10 minutes)
+let catalogCache: { folders: { article: string; photoCount: number; coverProxyUrl: string }[]; ts: number } | null = null;
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+async function fetchAllFolders(token: string): Promise<string[]> {
+  type RawFolder = { type: string; name: string };
+
+  const fetchPage = async (baseFolder: string, offset: number): Promise<{ items: RawFolder[]; total: number }> => {
+    const folderPath = encodeURIComponent(baseFolder);
+    const res = await fetch(
+      `https://cloud-api.yandex.net/v1/disk/resources?path=${folderPath}&limit=1000&offset=${offset}&sort=name`,
+      { headers: { Authorization: `OAuth ${token}` } }
+    );
+    if (!res.ok) return { items: [], total: 0 };
+    const data = await res.json() as { _embedded?: { items?: RawFolder[]; total?: number } };
+    return {
+      items: (data._embedded?.items || []).filter(i => i.type === "dir"),
+      total: data._embedded?.total ?? 0,
+    };
+  };
+
+  const allNames: string[] = [];
+
+  await Promise.all(BASE_FOLDERS.map(async (baseFolder) => {
+    // First page to discover total
+    const first = await fetchPage(baseFolder, 0);
+    first.items.forEach(i => allNames.push(i.name));
+
+    if (first.total > 1000) {
+      const offsets: number[] = [];
+      for (let o = 1000; o < first.total; o += 1000) offsets.push(o);
+      // Fetch remaining pages in parallel (batches of 5 to avoid rate limiting)
+      const BATCH = 5;
+      for (let b = 0; b < offsets.length; b += BATCH) {
+        const batch = offsets.slice(b, b + BATCH);
+        const pages = await Promise.all(batch.map(o => fetchPage(baseFolder, o)));
+        pages.forEach(p => p.items.forEach(i => allNames.push(i.name)));
+      }
+    }
+  }));
+
+  // Deduplicate and sort
+  return [...new Set(allNames)].sort((a, b) => a.localeCompare(b, "ru"));
+}
+
 router.get("/warehouse/catalog", async (req: Request, res: Response) => {
   try {
     const token = getToken();
-    const folderPath = encodeURIComponent(BASE_FOLDER);
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const forceRefresh = req.query.refresh === "1";
 
-    const folderRes = await fetch(
-      `https://cloud-api.yandex.net/v1/disk/resources?path=${folderPath}&limit=200&sort=name`,
-      { headers: { Authorization: `OAuth ${token}` } }
-    );
-
-    if (!folderRes.ok) {
-      res.json({ folders: [] });
+    // Serve from cache if fresh
+    if (catalogCache && !forceRefresh && Date.now() - catalogCache.ts < CACHE_TTL_MS) {
+      res.json({ folders: catalogCache.folders, cached: true });
       return;
     }
 
-    const data = await folderRes.json() as {
-      _embedded?: {
-        items?: Array<{ type: string; name: string; path: string }>
-      }
-    };
+    const names = await fetchAllFolders(token);
+    const folders = names.map(n => ({ article: n, photoCount: 0, coverProxyUrl: "" }));
 
-    const items = data._embedded?.items || [];
-    const articleFolders = items.filter(i => i.type === "dir");
-
-    const folders = await Promise.all(articleFolders.map(async folder => {
-      const articlePath = encodeURIComponent(folder.path);
-      const contentRes = await fetch(
-        `https://cloud-api.yandex.net/v1/disk/resources?path=${articlePath}&limit=100`,
-        { headers: { Authorization: `OAuth ${token}` } }
-      );
-
-      if (!contentRes.ok) {
-        return { article: folder.name, photoCount: 0, coverProxyUrl: "" };
-      }
-
-      const contentData = await contentRes.json() as {
-        _embedded?: { items?: Array<{ type: string; path: string }> }
-      };
-      const files = (contentData._embedded?.items || []).filter(i => i.type === "file");
-      const photoCount = files.length;
-
-      let coverProxyUrl = "";
-      if (files.length > 0) {
-        const firstFilePath = encodeURIComponent(files[0].path);
-        coverProxyUrl = `${baseUrl}/api/warehouse/photo-proxy?path=${firstFilePath}`;
-      }
-
-      return { article: folder.name, photoCount, coverProxyUrl };
-    }));
-
-    res.json({ folders });
+    catalogCache = { folders, ts: Date.now() };
+    res.json({ folders, cached: false });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to get catalog";
     req.log.error({ err }, "Catalog error");
@@ -160,36 +171,25 @@ router.get("/warehouse/photos/:article", async (req: Request, res: Response) => 
   try {
     const token = getToken();
     const { article } = req.params;
-    const folderPath = encodeURIComponent(`${BASE_FOLDER}/${article}`);
-
-    const folderRes = await fetch(
-      `https://cloud-api.yandex.net/v1/disk/resources?path=${folderPath}&limit=100&preview_size=M&preview_crop=false`,
-      { headers: { Authorization: `OAuth ${token}` } }
-    );
-
-    if (!folderRes.ok) {
-      res.json({ article, photos: [] });
-      return;
-    }
-
-    const data = await folderRes.json() as {
-      _embedded?: {
-        items?: Array<{
-          type: string;
-          name: string;
-          public_url?: string;
-          path: string;
-          preview?: string;
-        }>
-      }
-    };
-
-    const items = data._embedded?.items || [];
-    const files = items.filter(i => i.type === "file");
-
     const baseUrl = `${req.protocol}://${req.get("host")}`;
 
-    const photos = await Promise.all(files.map(async file => {
+    type RawFile = { type: string; name: string; public_url?: string; path: string; preview?: string };
+
+    const allFiles: RawFile[] = [];
+
+    await Promise.all(BASE_FOLDERS.map(async (baseFolder) => {
+      const folderPath = encodeURIComponent(`${baseFolder}/${article}`);
+      const folderRes = await fetch(
+        `https://cloud-api.yandex.net/v1/disk/resources?path=${folderPath}&limit=100&preview_size=M&preview_crop=false`,
+        { headers: { Authorization: `OAuth ${token}` } }
+      );
+      if (!folderRes.ok) return;
+      const data = await folderRes.json() as { _embedded?: { items?: RawFile[] } };
+      const files = (data._embedded?.items || []).filter(i => i.type === "file");
+      allFiles.push(...files);
+    }));
+
+    const photos = await Promise.all(allFiles.map(async file => {
       let publicUrl = file.public_url;
       if (!publicUrl) {
         publicUrl = await publishFile(file.path, token) || "";
@@ -240,7 +240,7 @@ router.get("/warehouse/photo-proxy", async (req: Request, res: Response) => {
 
     const contentType = info.mime_type || imgRes.headers.get("content-type") || "image/jpeg";
     res.setHeader("Content-Type", contentType);
-    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Cache-Control", "no-store");
 
     const buffer = Buffer.from(await imgRes.arrayBuffer());
     res.end(buffer);

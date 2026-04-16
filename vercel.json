@@ -1,3 +1,14 @@
 {
-  "installCommand": "pnpm install"
+  "buildCommand": "pnpm install && BASE_PATH=/ PORT=3000 pnpm --filter @workspace/warehouse-cam build",
+  "outputDirectory": "artifacts/warehouse-cam/dist/public",
+  "installCommand": "pnpm install",
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index" }
+  ],
+  "functions": {
+    "api/index.ts": {
+      "memory": 512,
+      "maxDuration": 30
+    }
+  }
 }

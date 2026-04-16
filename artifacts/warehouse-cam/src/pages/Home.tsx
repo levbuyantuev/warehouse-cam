@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 
 type Step = 'article' | 'gallery' | 'preview' | 'success';
+const FOLDERS = ["Avito", "Avito2", "ПЕРЕКИД_V1.0"] as const;
+type Folder = typeof FOLDERS[number];
 
 export default function Home() {
   const queryClient = useQueryClient();
@@ -18,6 +20,7 @@ export default function Home() {
 
   const [step, setStep] = useState<Step>('article');
   const [article, setArticle] = useState('');
+  const [folder, setFolder] = useState<Folder>('Avito');
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -76,6 +79,7 @@ export default function Home() {
     uploadMutation.mutate({
       data: {
         article: article.trim(),
+        folder: folder,
         photo: photoFile as any, // The generated client expects string format binary, which accepts File in FormData
       }
     });
@@ -192,7 +196,7 @@ export default function Home() {
               exit="out"
               className="flex-1 flex flex-col h-full"
             >
-              <div className="flex items-center mb-6">
+              <div className="flex items-center mb-4">
                 <button 
                   onClick={resetToArticle}
                   className="p-3 -ml-3 rounded-full hover:bg-stone-200 active:bg-stone-300 transition-colors text-stone-600"
@@ -202,6 +206,28 @@ export default function Home() {
                 <div className="flex-1 ml-2">
                   <p className="text-xs font-semibold text-stone-500 uppercase tracking-wider">Артикул</p>
                   <h2 className="text-2xl font-display font-bold text-stone-800">{article}</h2>
+                </div>
+              </div>
+
+              {/* Folder toggle */}
+              <div className="mb-4">
+                <p className="text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">
+                  Загружать в папку
+                </p>
+                <div className="flex gap-2">
+                  {FOLDERS.map(f => (
+                    <button
+                      key={f}
+                      onClick={() => setFolder(f)}
+                      className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-colors ${
+                        folder === f
+                          ? "bg-primary text-white border-primary shadow-md shadow-primary/20"
+                          : "bg-white text-stone-600 border-stone-200 hover:border-primary/50"
+                      }`}
+                    >
+                      {f}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -363,7 +389,7 @@ export default function Home() {
                 <h2 className="text-4xl font-display font-bold text-stone-800 mb-3">Загружено!</h2>
                 <p className="text-lg text-stone-500 mb-12">
                   Фото сохранено в папку <br/>
-                  <strong className="text-stone-800 bg-stone-200 px-2 py-1 rounded-md">{article}</strong>
+                  <strong className="text-stone-800 bg-stone-200 px-2 py-1 rounded-md">{folder}/{article}</strong>
                 </p>
 
                 <div className="flex flex-col gap-4">

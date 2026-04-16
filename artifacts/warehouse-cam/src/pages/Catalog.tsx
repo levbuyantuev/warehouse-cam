@@ -1,8 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Box, RefreshCw, AlertCircle, ChevronLeft, ChevronRight,
-  Image as ImageIcon, Camera, Search, X, ZoomIn, Package, Plus
+  Image as ImageIcon, Camera, Search, X, ZoomIn, Package, Plus, RotateCcw
 } from "lucide-react";
 import { useGetCatalog, useGetArticlePhotos } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
@@ -11,13 +11,17 @@ import { useLocation } from "wouter";
 
 type View = "grid" | "article";
 
+const VISIBLE_CHUNK = 80;
+
 export default function Catalog() {
   const [, navigate] = useLocation();
   const [view, setView] = useState<View>("grid");
   const [selectedArticle, setSelectedArticle] = useState<string>("");
   const [search, setSearch] = useState("");
+  const [visibleCount, setVisibleCount] = useState(VISIBLE_CHUNK);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState(0);
+  const loaderRef = useRef<HTMLDivElement>(null);
 
   const { data: catalogData, isLoading, isError, refetch } = useGetCatalog();
 
@@ -25,9 +29,28 @@ export default function Catalog() {
     query: { enabled: view === "article" && !!selectedArticle }
   });
 
-  const folders = (catalogData?.folders ?? []).filter(f =>
-    f.article.toLowerCase().includes(search.toLowerCase())
+  const allFolders = catalogData?.folders ?? [];
+  const filtered = useMemo(() =>
+    search.trim().length === 0
+      ? allFolders
+      : allFolders.filter(f => f.article.toLowerCase().includes(search.toLowerCase())),
+    [allFolders, search]
   );
+  const folders = filtered.slice(0, visibleCount);
+  const hasMore = visibleCount < filtered.length;
+
+  // Reset visible count when search changes
+  useEffect(() => { setVisibleCount(VISIBLE_CHUNK); }, [search]);
+
+  // Infinite scroll sentinel
+  useEffect(() => {
+    if (!loaderRef.current || !hasMore) return;
+    const obs = new IntersectionObserver(([e]) => {
+      if (e.isIntersecting) setVisibleCount(c => c + VISIBLE_CHUNK);
+    }, { threshold: 0.1 });
+    obs.observe(loaderRef.current);
+    return () => obs.disconnect();
+  }, [hasMore]);
 
   const photos = photosData?.photos ?? [];
 
@@ -40,28 +63,19 @@ export default function Catalog() {
     setLightboxIndex(index);
     setLightboxUrl(photos[index]?.previewProxyUrl ?? null);
   };
-
   const lightboxNext = () => {
     const next = (lightboxIndex + 1) % photos.length;
     setLightboxIndex(next);
     setLightboxUrl(photos[next]?.previewProxyUrl ?? null);
   };
-
   const lightboxPrev = () => {
     const prev = (lightboxIndex - 1 + photos.length) % photos.length;
     setLightboxIndex(prev);
     setLightboxUrl(photos[prev]?.previewProxyUrl ?? null);
   };
 
-  const pageVariants = {
-    initial: { opacity: 0, y: 12 },
-    in: { opacity: 1, y: 0, transition: { duration: 0.25, ease: "easeOut" } },
-    out: { opacity: 0, y: -12, transition: { duration: 0.18 } }
-  };
-
   return (
     <div className="min-h-screen bg-stone-100 flex flex-col relative overflow-hidden">
-      {/* Background */}
       <div
         className="absolute inset-0 z-0 opacity-40 pointer-events-none mix-blend-multiply"
         style={{
@@ -78,11 +92,24 @@ export default function Catalog() {
             <Box className="w-5 h-5 text-white" strokeWidth={2.5} />
           </div>
           <div className="flex-1">
-            <h1 className="font-display text-xl font-bold text-stone-800 leading-tight">Каталог Avito</h1>
+            <h1 className="font-display text-xl font-bold text-stone-800 leading-tight">Каталог Avito / Avito2 / ПЕРЕКИД</h1>
             <p className="text-xs text-stone-500">
-              {isLoading ? "Загрузка…" : `${catalogData?.folders.length ?? 0} артикулов`}
+              {isLoading
+                ? "Загрузка списка артикулов…"
+                : view === "grid"
+                  ? `${filtered.length} из ${allFolders.length} артикулов`
+                  : `${allFolders.length} артикулов`}
             </p>
           </div>
+          {view === "grid" && !isLoading && (
+            <button
+              onClick={() => refetch()}
+              className="p-2 rounded-full hover:bg-stone-200 active:bg-stone-300 transition-colors text-stone-400"
+              title="Обновить список"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+          )}
           {view === "article" && (
             <button
               onClick={() => setView("grid")}
@@ -133,70 +160,59 @@ export default function Catalog() {
       </header>
 
       {/* Main */}
-      <main className="relative z-10 flex-1 overflow-y-auto px-4 pb-8">
+      <main className="relative z-10 flex-1 overflow-y-auto px-4 pb-24">
         <AnimatePresence mode="wait">
-          {/* GRID VIEW */}
+
+          {/* GRID VIEW — compact list */}
           {view === "grid" && (
-            <motion.div key="grid" variants={pageVariants} initial="initial" animate="in" exit="out">
+            <motion.div
+              key="grid"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+            >
               {isLoading ? (
-                <div className="flex flex-col items-center justify-center py-24 text-stone-400 gap-3">
+                <div className="flex flex-col items-center justify-center py-24 text-stone-400 gap-3 text-center">
                   <RefreshCw className="w-8 h-8 animate-spin" />
-                  <p>Загружаю каталог…</p>
+                  <p>Загружаю список артикулов…</p>
+                  <p className="text-xs text-stone-300 max-w-xs">Первая загрузка может занять 10–15 секунд, потом быстро из кеша</p>
                 </div>
               ) : isError ? (
                 <div className="flex flex-col items-center justify-center py-24 text-stone-400 gap-4 text-center">
                   <AlertCircle className="w-10 h-10 text-red-400" />
                   <p>Не удалось загрузить каталог</p>
-                  <Button variant="outline" size="sm" onClick={() => refetch()}>
-                    Повторить
-                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => refetch()}>Повторить</Button>
                 </div>
-              ) : folders.length === 0 ? (
+              ) : filtered.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-24 text-stone-400 gap-3 text-center">
                   <ImageIcon className="w-10 h-10 text-stone-300" />
                   <p>{search ? `Артикул «${search}» не найден` : "Каталог пуст"}</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-3 pt-4">
-                  {folders.map((folder, i) => (
-                    <motion.button
+                <div className="pt-3 flex flex-col gap-0.5">
+                  {folders.map((folder) => (
+                    <button
                       key={folder.article}
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ delay: Math.min(i * 0.03, 0.3) }}
                       onClick={() => openArticle(folder.article)}
-                      className="group bg-white rounded-2xl overflow-hidden shadow-sm border border-stone-200/60 flex flex-col text-left active:scale-95 transition-transform focus:outline-none"
+                      className="w-full flex items-center gap-3 px-4 py-3 bg-white rounded-xl border border-stone-100 shadow-sm active:bg-stone-50 active:scale-[0.99] transition-transform text-left focus:outline-none"
                     >
-                      {/* Thumbnail */}
-                      <div className="aspect-square bg-stone-100 relative overflow-hidden">
-                        {folder.coverProxyUrl ? (
-                          <img
-                            src={folder.coverProxyUrl}
-                            alt={folder.article}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                            loading="lazy"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center">
-                            <Camera className="w-10 h-10 text-stone-300" />
-                          </div>
-                        )}
-                        {/* Photo count badge */}
-                        {folder.photoCount > 0 && (
-                          <div className="absolute bottom-2 right-2 bg-black/60 backdrop-blur-sm text-white text-xs font-semibold px-2 py-0.5 rounded-full">
-                            {folder.photoCount}
-                          </div>
-                        )}
+                      <div className="w-9 h-9 rounded-lg bg-stone-100 flex items-center justify-center shrink-0">
+                        <Camera className="w-5 h-5 text-stone-400" />
                       </div>
-                      {/* Label */}
-                      <div className="px-3 py-2.5">
-                        <p className="font-display font-bold text-stone-800 text-sm truncate">{folder.article}</p>
-                        <p className="text-xs text-stone-400 mt-0.5">
-                          {folder.photoCount === 0 ? "Нет фото" : `${folder.photoCount} фото`}
-                        </p>
-                      </div>
-                    </motion.button>
+                      <span className="flex-1 font-display font-semibold text-stone-800 text-sm">
+                        {folder.article}
+                      </span>
+                      <ChevronRight className="w-4 h-4 text-stone-300 shrink-0" />
+                    </button>
                   ))}
+
+                  {/* Infinite scroll sentinel */}
+                  {hasMore && (
+                    <div ref={loaderRef} className="flex justify-center py-4">
+                      <RefreshCw className="w-5 h-5 text-stone-300 animate-spin" />
+                    </div>
+                  )}
                 </div>
               )}
             </motion.div>
@@ -204,7 +220,13 @@ export default function Catalog() {
 
           {/* ARTICLE VIEW */}
           {view === "article" && (
-            <motion.div key="article" variants={pageVariants} initial="initial" animate="in" exit="out">
+            <motion.div
+              key="article"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+            >
               {isLoadingPhotos ? (
                 <div className="flex flex-col items-center justify-center py-24 text-stone-400 gap-3">
                   <RefreshCw className="w-8 h-8 animate-spin" />
@@ -260,20 +282,15 @@ export default function Catalog() {
             className="fixed inset-0 z-50 bg-black/97 flex items-center justify-center"
             onClick={() => setLightboxUrl(null)}
           >
-            {/* Close */}
             <button
               onClick={() => setLightboxUrl(null)}
               className="absolute top-4 right-4 p-3 rounded-full bg-white/10 hover:bg-white/20 transition-colors text-white z-10"
             >
               <X className="w-6 h-6" />
             </button>
-
-            {/* Counter */}
             <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-sm text-white text-sm px-3 py-1 rounded-full z-10">
               {lightboxIndex + 1} / {photos.length}
             </div>
-
-            {/* Prev */}
             {photos.length > 1 && (
               <button
                 onClick={e => { e.stopPropagation(); lightboxPrev(); }}
@@ -282,8 +299,6 @@ export default function Catalog() {
                 <ChevronLeft className="w-6 h-6" />
               </button>
             )}
-
-            {/* Image */}
             <motion.img
               key={lightboxUrl}
               src={lightboxUrl}
@@ -295,8 +310,6 @@ export default function Catalog() {
               className="max-w-full max-h-full object-contain select-none px-16"
               onClick={e => e.stopPropagation()}
             />
-
-            {/* Next */}
             {photos.length > 1 && (
               <button
                 onClick={e => { e.stopPropagation(); lightboxNext(); }}
