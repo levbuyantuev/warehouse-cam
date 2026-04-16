@@ -1,7 +1,7 @@
 {
-  "buildCommand": "pnpm install && BASE_PATH=/ PORT=3000 pnpm --filter @workspace/warehouse-cam build",
+  "installCommand": "pnpm install --no-frozen-lockfile",
+  "buildCommand": "BASE_PATH=/ PORT=3000 pnpm --filter @workspace/warehouse-cam build",
   "outputDirectory": "artifacts/warehouse-cam/dist/public",
-  "installCommand": "pnpm install",
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api/index" }
   ],
