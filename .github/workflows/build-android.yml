@@ -1,3 +1,60 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'artifacts/warehouse-cam/**'
+      - '.github/workflows/build-android.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '10'
+          run_install: false
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build web assets
+        run: pnpm --filter @workspace/warehouse-cam run build
+
+      - name: Capacitor sync
+        run: cd artifacts/warehouse-cam && npx cap sync android --inline
+
+      - name: Make gradlew executable
+        run: chmod +x artifacts/warehouse-cam/android/gradlew
+
+      - name: Build debug APK
+        run: cd artifacts/warehouse-cam/android && ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WarehouseCam-debug-${{ github.run_number }}
+          path: artifacts/warehouse-cam/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
