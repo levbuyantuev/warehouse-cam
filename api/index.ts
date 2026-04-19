@@ -101,6 +101,31 @@ async function fetchAllFolders(token: string): Promise<string[]> {
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 
+// Returns a pre-signed Yandex Disk upload URL so the browser can upload directly
+// (avoids the double-hop: browser → server → Yandex that caused 3× slowdown).
+app.get("/api/warehouse/upload-url", async (req: Request, res: Response) => {
+  try {
+    const token = getToken();
+    const article = (req.query.article || "").toString().trim();
+    const folderParam = (req.query.folder || "").toString().trim();
+    const ext = (req.query.ext || "jpg").toString().replace(/[^a-zA-Z0-9]/g, "").slice(0, 5) || "jpg";
+
+    if (!article) { res.status(400).json({ error: "article is required" }); return; }
+    const baseFolder = BASE_FOLDERS.includes(folderParam) ? folderParam : BASE_FOLDERS[0];
+
+    const filename = `photo-${Date.now()}.${ext}`;
+    const filePath = `${baseFolder}/${article}/${filename}`;
+
+    await createFolderIfNeeded(`${baseFolder}/${article}`, token);
+    const uploadUrl = await getUploadUrl(filePath, token);
+
+    res.json({ uploadUrl, filePath, filename, folder: baseFolder });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to get upload URL";
+    res.status(500).json({ error: message });
+  }
+});
+
 app.post("/api/warehouse/photo", upload.single("photo"), async (req: Request, res: Response) => {
   try {
     const token = getToken();
@@ -169,8 +194,8 @@ app.get("/api/warehouse/photos/:article", async (req: Request, res: Response) =>
       return {
         name: file.name,
         publicUrl,
-        // Relative URL — browser resolves against page origin (Vercel edge terminates TLS,
-        // so req.protocol is "http" — absolute URLs cause Mixed Content on HTTPS pages).
+        // Relative URL — browser resolves against page origin via proxy.
+        // Absolute localhost URLs are unreachable from client browsers.
         previewProxyUrl: `/api/warehouse/photo-proxy?path=${encodeURIComponent(file.path)}`,
       };
     }));
