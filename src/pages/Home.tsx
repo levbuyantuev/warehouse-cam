@@ -13,45 +13,55 @@ type Step = 'article' | 'gallery' | 'preview' | 'uploading' | 'success';
 const FOLDERS = ["Avito", "Avito2", "ПЕРЕКИД_V1.0"] as const;
 type Folder = typeof FOLDERS[number];
 
-// Resize + JPEG-compress a photo client-side using Canvas.
+// Resize + JPEG-compress a photo client-side.
 // Target: max 1280 px on longest side, JPEG quality 0.80 — enough for Avito (min 1200px).
 // Typical result: 8 MB phone photo → 150–300 KB (25–50× smaller).
-// Has a built-in 5s timeout so it never hangs the UI permanently.
-function compressImage(file: File, maxPx = 1280, quality = 0.80): Promise<File> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('timeout')), 5_000);
-    const done = (result: File | Error) => {
-      clearTimeout(timeout);
-      result instanceof Error ? reject(result) : resolve(result);
-    };
+//
+// Uses createImageBitmap() (off-main-thread decode in Chrome/Android) +
+// OffscreenCanvas.convertToBlob() (off-main-thread JPEG encode) when available.
+// Falls back to HTMLCanvasElement on older browsers.
+async function compressImage(file: File, maxPx = 1280, quality = 0.80): Promise<File> {
+  const outName = file.name.replace(/\.[^.]+$/, '.jpg');
 
-    const img = new Image();
-    const blobUrl = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(blobUrl);
-      let { width: w, height: h } = img;
-      if (Math.max(w, h) > maxPx) {
-        if (w >= h) { h = Math.round((h * maxPx) / w); w = maxPx; }
-        else { w = Math.round((w * maxPx) / h); h = maxPx; }
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) { done(new Error('no canvas context')); return; }
-      ctx.drawImage(img, 0, 0, w, h);
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) { done(new Error('toBlob returned null')); return; }
-          done(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
-        },
-        'image/jpeg',
-        quality,
-      );
-    };
-    img.onerror = () => { URL.revokeObjectURL(blobUrl); done(new Error('image load failed')); };
-    img.src = blobUrl;
-  });
+  // 1. Decode image off main thread via createImageBitmap
+  const bitmap = await Promise.race([
+    createImageBitmap(file),
+    new Promise<never>((_, r) => setTimeout(() => r(new Error('decode timeout')), 8_000)),
+  ]);
+
+  // 2. Compute target dimensions
+  let { width: w, height: h } = bitmap;
+  if (Math.max(w, h) > maxPx) {
+    if (w >= h) { h = Math.round((h * maxPx) / w); w = maxPx; }
+    else { w = Math.round((w * maxPx) / h); h = maxPx; }
+  }
+
+  // 3. Draw to canvas (prefer OffscreenCanvas — encode stays off main thread)
+  let blob: Blob;
+  const useOffscreen = typeof OffscreenCanvas !== 'undefined';
+  if (useOffscreen) {
+    const oc = new OffscreenCanvas(w, h);
+    oc.getContext('2d')!.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    blob = await Promise.race([
+      oc.convertToBlob({ type: 'image/jpeg', quality }),
+      new Promise<never>((_, r) => setTimeout(() => r(new Error('encode timeout')), 5_000)),
+    ]);
+  } else {
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    blob = await new Promise<Blob>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('toBlob timeout')), 5_000);
+      canvas.toBlob((b) => {
+        clearTimeout(t);
+        b ? resolve(b) : reject(new Error('toBlob returned null'));
+      }, 'image/jpeg', quality);
+    });
+  }
+
+  return new File([blob], outName, { type: 'image/jpeg' });
 }
 
 function formatBytes(bytes: number) {
