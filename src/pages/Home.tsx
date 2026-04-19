@@ -16,8 +16,15 @@ type Folder = typeof FOLDERS[number];
 // Resize + JPEG-compress a photo client-side using Canvas.
 // Target: max 1920 px on longest side, JPEG quality 0.82.
 // Typical result: 8 MB phone photo → 300–500 KB (15–25× smaller).
+// Has a built-in 12s timeout so it never hangs the UI permanently.
 function compressImage(file: File, maxPx = 1920, quality = 0.82): Promise<File> {
   return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('timeout')), 12_000);
+    const done = (result: File | Error) => {
+      clearTimeout(timeout);
+      result instanceof Error ? reject(result) : resolve(result);
+    };
+
     const img = new Image();
     const blobUrl = URL.createObjectURL(file);
     img.onload = () => {
@@ -30,17 +37,19 @@ function compressImage(file: File, maxPx = 1920, quality = 0.82): Promise<File> 
       const canvas = document.createElement('canvas');
       canvas.width = w;
       canvas.height = h;
-      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { done(new Error('no canvas context')); return; }
+      ctx.drawImage(img, 0, 0, w, h);
       canvas.toBlob(
         (blob) => {
-          if (!blob) { reject(new Error('Сжатие не удалось')); return; }
-          resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
+          if (!blob) { done(new Error('toBlob returned null')); return; }
+          done(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
         },
         'image/jpeg',
         quality,
       );
     };
-    img.onerror = () => { URL.revokeObjectURL(blobUrl); reject(new Error('Не удалось загрузить изображение')); };
+    img.onerror = () => { URL.revokeObjectURL(blobUrl); done(new Error('image load failed')); };
     img.src = blobUrl;
   });
 }
@@ -470,10 +479,10 @@ export default function Home() {
                   size="xl" 
                   onClick={handleUpload}
                   className="flex-[2] gap-3"
-                  disabled={step === 'uploading' || isCompressing}
+                  disabled={step === 'uploading'}
                 >
                   <Upload className="w-6 h-6" />
-                  Загрузить
+                  {isCompressing ? 'Загрузить (оригинал)' : 'Загрузить'}
                 </Button>
               </div>
               
