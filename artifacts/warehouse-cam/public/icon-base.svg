@@ -1,0 +1,9 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" rx="102" fill="#FF3C00"/>
+  <!-- Box / Package icon (Lucide-style), scaled to ~260px centered -->
+  <g transform="translate(126, 126) scale(10.833)">
+    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" stroke="white" stroke-width="1.6" stroke-linejoin="round" fill="none"/>
+    <polyline points="3.27 6.96 12 12.01 20.73 6.96" stroke="white" stroke-width="1.6" stroke-linejoin="round" fill="none"/>
+    <line x1="12" y1="22.08" x2="12" y2="12" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+  </g>
+</svg>
