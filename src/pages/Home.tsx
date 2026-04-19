@@ -14,12 +14,12 @@ const FOLDERS = ["Avito", "Avito2", "ПЕРЕКИД_V1.0"] as const;
 type Folder = typeof FOLDERS[number];
 
 // Resize + JPEG-compress a photo client-side using Canvas.
-// Target: max 1920 px on longest side, JPEG quality 0.82.
-// Typical result: 8 MB phone photo → 300–500 KB (15–25× smaller).
-// Has a built-in 12s timeout so it never hangs the UI permanently.
-function compressImage(file: File, maxPx = 1920, quality = 0.82): Promise<File> {
+// Target: max 1280 px on longest side, JPEG quality 0.80 — enough for Avito (min 1200px).
+// Typical result: 8 MB phone photo → 150–300 KB (25–50× smaller).
+// Has a built-in 5s timeout so it never hangs the UI permanently.
+function compressImage(file: File, maxPx = 1280, quality = 0.80): Promise<File> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('timeout')), 12_000);
+    const timeout = setTimeout(() => reject(new Error('timeout')), 5_000);
     const done = (result: File | Error) => {
       clearTimeout(timeout);
       result instanceof Error ? reject(result) : resolve(result);
