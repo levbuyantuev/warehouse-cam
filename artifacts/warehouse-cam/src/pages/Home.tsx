@@ -2,16 +2,107 @@ import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Camera, Upload, CheckCircle2, ChevronLeft, Image as ImageIcon, Box, RefreshCw, AlertCircle, X, ZoomIn } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useUploadPhoto, useGetArticlePhotos, getGetArticlePhotosQueryKey } from "@workspace/api-client-react";
+import { useGetArticlePhotos, getGetArticlePhotosQueryKey } from "@workspace/api-client-react";
 import { useSearch } from "wouter";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 
-type Step = 'article' | 'gallery' | 'preview' | 'success';
+type Step = 'article' | 'gallery' | 'preview' | 'uploading' | 'success';
 const FOLDERS = ["Avito", "Avito2", "ПЕРЕКИД_V1.0"] as const;
 type Folder = typeof FOLDERS[number];
+
+// Resize + JPEG-compress a photo client-side.
+// Target: max 1280 px on longest side, JPEG quality 0.80 — enough for Avito (min 1200px).
+// Typical result: 8 MB phone photo → 150–300 KB (25–50× smaller).
+//
+// Uses createImageBitmap() (off-main-thread decode in Chrome/Android) +
+// OffscreenCanvas.convertToBlob() (off-main-thread JPEG encode) when available.
+// Falls back to HTMLCanvasElement on older browsers.
+async function compressImage(file: File, maxPx = 1280, quality = 0.80): Promise<File> {
+  const outName = file.name.replace(/\.[^.]+$/, '.jpg');
+
+  // 1. Decode image off main thread via createImageBitmap
+  const bitmap = await Promise.race([
+    createImageBitmap(file),
+    new Promise<never>((_, r) => setTimeout(() => r(new Error('decode timeout')), 8_000)),
+  ]);
+
+  // 2. Compute target dimensions
+  let { width: w, height: h } = bitmap;
+  if (Math.max(w, h) > maxPx) {
+    if (w >= h) { h = Math.round((h * maxPx) / w); w = maxPx; }
+    else { w = Math.round((w * maxPx) / h); h = maxPx; }
+  }
+
+  // 3. Draw to canvas (prefer OffscreenCanvas — encode stays off main thread)
+  let blob: Blob;
+  const useOffscreen = typeof OffscreenCanvas !== 'undefined';
+  if (useOffscreen) {
+    const oc = new OffscreenCanvas(w, h);
+    oc.getContext('2d')!.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    blob = await Promise.race([
+      oc.convertToBlob({ type: 'image/jpeg', quality }),
+      new Promise<never>((_, r) => setTimeout(() => r(new Error('encode timeout')), 5_000)),
+    ]);
+  } else {
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    blob = await new Promise<Blob>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('toBlob timeout')), 5_000);
+      canvas.toBlob((b) => {
+        clearTimeout(t);
+        b ? resolve(b) : reject(new Error('toBlob returned null'));
+      }, 'image/jpeg', quality);
+    });
+  }
+
+  return new File([blob], outName, { type: 'image/jpeg' });
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+// Direct-to-Yandex upload: get a pre-signed URL from our API, then PUT the file
+// straight to Yandex Disk — no server relay, so upload is ~3× faster.
+async function uploadDirect(
+  file: File,
+  article: string,
+  folder: Folder,
+  onProgress: (pct: number) => void,
+): Promise<{ filename: string; folder: string }> {
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const params = new URLSearchParams({ article, folder, ext });
+  const urlRes = await fetch(`/api/warehouse/upload-url?${params}`);
+  if (!urlRes.ok) {
+    const err = await urlRes.json().catch(() => ({}));
+    throw new Error(err.error || `Server error ${urlRes.status}`);
+  }
+  const { uploadUrl, filename, folder: resolvedFolder } = await urlRes.json() as {
+    uploadUrl: string; filePath: string; filename: string; folder: string;
+  };
+
+  // Use XMLHttpRequest for upload-progress events (fetch doesn't support them)
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", uploadUrl);
+    xhr.setRequestHeader("Content-Type", file.type || "image/jpeg");
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Yandex upload failed: ${xhr.status}`)));
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.send(file);
+  });
+
+  return { filename, folder: resolvedFolder };
+}
 
 export default function Home() {
   const queryClient = useQueryClient();
@@ -24,6 +115,13 @@ export default function Home() {
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadedFolder, setUploadedFolder] = useState<string>('Avito');
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [compressedFile, setCompressedFile] = useState<File | null>(null);
+  const [originalSize, setOriginalSize] = useState(0);
+  const [compressedSize, setCompressedSize] = useState(0);
 
   // Pre-fill article from URL param (e.g. when navigating from Catalog)
   useEffect(() => {
@@ -42,16 +140,6 @@ export default function Home() {
     }
   });
 
-  const uploadMutation = useUploadPhoto({
-    mutation: {
-      onSuccess: () => {
-        // Invalidate gallery cache for this article
-        queryClient.invalidateQueries({ queryKey: getGetArticlePhotosQueryKey(article) });
-        setStep('success');
-      },
-    }
-  });
-
   // Handlers
   const handleArticleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,40 +154,63 @@ export default function Home() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setPhotoFile(file);
-      setPreviewUrl(URL.createObjectURL(file));
+    if (!file) return;
+    setPhotoFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
+    setUploadError(null);
+    setUploadProgress(0);
+    setCompressedFile(null);
+    setOriginalSize(file.size);
+    setCompressedSize(0);
+    setIsCompressing(true);
+    setStep('preview');
+    compressImage(file)
+      .then((compressed) => {
+        setCompressedFile(compressed);
+        setCompressedSize(compressed.size);
+      })
+      .catch(() => {})
+      .finally(() => setIsCompressing(false));
+  };
+
+  const handleUpload = async () => {
+    if (!article || !photoFile) return;
+    setUploadError(null);
+    setUploadProgress(0);
+    setStep('uploading');
+    const fileToUpload = compressedFile ?? photoFile;
+    try {
+      const { folder: resolvedFolder } = await uploadDirect(fileToUpload, article.trim(), folder, setUploadProgress);
+      setUploadedFolder(resolvedFolder);
+      queryClient.invalidateQueries({ queryKey: getGetArticlePhotosQueryKey(article) });
+      setStep('success');
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Ошибка загрузки');
       setStep('preview');
     }
   };
 
-  const handleUpload = () => {
-    if (!article || !photoFile) return;
-    
-    uploadMutation.mutate({
-      data: {
-        article: article.trim(),
-        folder: folder,
-        photo: photoFile as any, // The generated client expects string format binary, which accepts File in FormData
-      }
-    });
+  const clearPhoto = () => {
+    setPhotoFile(null);
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+    setUploadError(null);
+    setUploadProgress(0);
+    setCompressedFile(null);
+    setOriginalSize(0);
+    setCompressedSize(0);
+    setIsCompressing(false);
   };
 
   const resetToArticle = () => {
+    clearPhoto();
     setArticle('');
-    setPhotoFile(null);
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl(null);
     setStep('article');
-    uploadMutation.reset();
   };
 
   const resetToGallery = () => {
-    setPhotoFile(null);
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl(null);
+    clearPhoto();
     setStep('gallery');
-    uploadMutation.reset();
   };
 
   // Variants for Framer Motion
@@ -295,7 +406,7 @@ export default function Home() {
           )}
 
           {/* STEP 3: PREVIEW & UPLOAD */}
-          {step === 'preview' && previewUrl && (
+          {(step === 'preview' || step === 'uploading') && previewUrl && (
             <motion.div
               key="step-preview"
               variants={pageVariants}
@@ -308,7 +419,7 @@ export default function Home() {
                 <button 
                   onClick={resetToGallery}
                   className="p-3 -ml-3 rounded-full hover:bg-stone-200 active:bg-stone-300 transition-colors text-stone-600"
-                  disabled={uploadMutation.isPending}
+                  disabled={step === 'uploading'}
                 >
                   <ChevronLeft className="w-7 h-7" />
                 </button>
@@ -317,20 +428,50 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="flex-1 bg-black rounded-3xl overflow-hidden shadow-2xl mb-6 relative">
+              <div className="flex-1 bg-black rounded-3xl overflow-hidden shadow-2xl mb-3 relative">
                 <img 
                   src={previewUrl} 
                   alt="Preview" 
                   className="w-full h-full object-contain"
                 />
                 
-                {/* Upload Overlay */}
-                {uploadMutation.isPending && (
-                  <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center text-white z-10">
-                    <RefreshCw className="w-12 h-12 animate-spin mb-4 text-primary" />
-                    <h3 className="font-display font-bold text-xl mb-1">Загрузка на Яндекс…</h3>
-                    <p className="text-white/70 text-sm">Пожалуйста, подождите</p>
+                {/* Upload progress overlay */}
+                {step === 'uploading' && (
+                  <div className="absolute inset-0 bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center text-white z-10 px-8">
+                    <h3 className="font-display font-bold text-xl mb-3">Загружаю на Яндекс…</h3>
+                    <div className="w-full bg-white/20 rounded-full h-3 mb-2 overflow-hidden">
+                      <motion.div
+                        className="h-full bg-primary rounded-full"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${uploadProgress}%` }}
+                        transition={{ ease: "easeOut" }}
+                      />
+                    </div>
+                    <p className="text-white/70 text-sm tabular-nums">{uploadProgress}%</p>
                   </div>
+                )}
+              </div>
+
+              {/* Compression badge */}
+              <div className="flex items-center justify-center mb-4 min-h-[28px]">
+                {isCompressing && (
+                  <span className="flex items-center gap-2 text-sm text-stone-500">
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Сжимаю фото…
+                  </span>
+                )}
+                {!isCompressing && compressedSize > 0 && (
+                  <motion.span
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex items-center gap-2 text-sm font-medium bg-green-50 text-green-700 border border-green-200 rounded-full px-3 py-1"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    {formatBytes(originalSize)} → {formatBytes(compressedSize)}
+                    <span className="text-green-500 font-bold">
+                      −{Math.round((1 - compressedSize / originalSize) * 100)}%
+                    </span>
+                  </motion.span>
                 )}
               </div>
 
@@ -340,7 +481,7 @@ export default function Home() {
                   size="xl" 
                   onClick={handleCaptureClick}
                   className="flex-1"
-                  disabled={uploadMutation.isPending}
+                  disabled={step === 'uploading'}
                 >
                   Переснять
                 </Button>
@@ -348,19 +489,17 @@ export default function Home() {
                   size="xl" 
                   onClick={handleUpload}
                   className="flex-[2] gap-3"
-                  disabled={uploadMutation.isPending}
+                  disabled={step === 'uploading'}
                 >
                   <Upload className="w-6 h-6" />
-                  Загрузить
+                  {isCompressing ? 'Загрузить (оригинал)' : 'Загрузить'}
                 </Button>
               </div>
               
-              {uploadMutation.isError && (
+              {uploadError && (
                 <div className="p-4 mb-4 bg-red-50 text-red-600 rounded-2xl border border-red-100 flex items-start gap-3">
                   <AlertCircle className="w-6 h-6 shrink-0" />
-                  <div className="text-sm font-medium">
-                    Ошибка загрузки. Проверьте соединение и попробуйте снова.
-                  </div>
+                  <div className="text-sm font-medium">{uploadError}</div>
                 </div>
               )}
             </motion.div>
@@ -389,7 +528,7 @@ export default function Home() {
                 <h2 className="text-4xl font-display font-bold text-stone-800 mb-3">Загружено!</h2>
                 <p className="text-lg text-stone-500 mb-12">
                   Фото сохранено в папку <br/>
-                  <strong className="text-stone-800 bg-stone-200 px-2 py-1 rounded-md">{folder}/{article}</strong>
+                  <strong className="text-stone-800 bg-stone-200 px-2 py-1 rounded-md">{uploadedFolder}/{article}</strong>
                 </p>
 
                 <div className="flex flex-col gap-4">
@@ -416,7 +555,7 @@ export default function Home() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
+            className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-4"
             onClick={() => setLightboxUrl(null)}
           >
             <button
@@ -432,7 +571,8 @@ export default function Home() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.85, opacity: 0 }}
               transition={{ duration: 0.25, ease: "easeOut" }}
-              className="max-w-full max-h-full object-contain select-none"
+              className="select-none rounded-xl"
+              style={{ maxWidth: '100%', maxHeight: '100dvh', width: 'auto', height: 'auto', objectFit: 'contain' }}
               onClick={e => e.stopPropagation()}
             />
           </motion.div>
