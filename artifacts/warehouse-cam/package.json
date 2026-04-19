@@ -74,5 +74,11 @@
     "vite-plugin-pwa": "^1.2.0",
     "wouter": "^3.3.5",
     "zod": "^3.25.76"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.3.1",
+    "@capacitor/camera": "^8.1.0",
+    "@capacitor/cli": "^8.3.1",
+    "@capacitor/core": "^8.3.1"
   }
 }
