@@ -13,6 +13,43 @@ type Step = 'article' | 'gallery' | 'preview' | 'uploading' | 'success';
 const FOLDERS = ["Avito", "Avito2", "ПЕРЕКИД_V1.0"] as const;
 type Folder = typeof FOLDERS[number];
 
+// Resize + JPEG-compress a photo client-side using Canvas.
+// Target: max 1920 px on longest side, JPEG quality 0.82.
+// Typical result: 8 MB phone photo → 300–500 KB (15–25× smaller).
+function compressImage(file: File, maxPx = 1920, quality = 0.82): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const blobUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(blobUrl);
+      let { width: w, height: h } = img;
+      if (Math.max(w, h) > maxPx) {
+        if (w >= h) { h = Math.round((h * maxPx) / w); w = maxPx; }
+        else { w = Math.round((w * maxPx) / h); h = maxPx; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { reject(new Error('Сжатие не удалось')); return; }
+          resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
+        },
+        'image/jpeg',
+        quality,
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(blobUrl); reject(new Error('Не удалось загрузить изображение')); };
+    img.src = blobUrl;
+  });
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
 // Direct-to-Yandex upload: get a pre-signed URL from our API, then PUT the file
 // straight to Yandex Disk — no server relay, so upload is ~3× faster.
 async function uploadDirect(
@@ -62,6 +99,10 @@ export default function Home() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadedFolder, setUploadedFolder] = useState<string>('Avito');
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [compressedFile, setCompressedFile] = useState<File | null>(null);
+  const [originalSize, setOriginalSize] = useState(0);
+  const [compressedSize, setCompressedSize] = useState(0);
 
   // Pre-fill article from URL param (e.g. when navigating from Catalog)
   useEffect(() => {
@@ -94,13 +135,23 @@ export default function Home() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setPhotoFile(file);
-      setPreviewUrl(URL.createObjectURL(file));
-      setUploadError(null);
-      setUploadProgress(0);
-      setStep('preview');
-    }
+    if (!file) return;
+    setPhotoFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
+    setUploadError(null);
+    setUploadProgress(0);
+    setCompressedFile(null);
+    setOriginalSize(file.size);
+    setCompressedSize(0);
+    setIsCompressing(true);
+    setStep('preview');
+    compressImage(file)
+      .then((compressed) => {
+        setCompressedFile(compressed);
+        setCompressedSize(compressed.size);
+      })
+      .catch(() => {})
+      .finally(() => setIsCompressing(false));
   };
 
   const handleUpload = async () => {
@@ -108,8 +159,9 @@ export default function Home() {
     setUploadError(null);
     setUploadProgress(0);
     setStep('uploading');
+    const fileToUpload = compressedFile ?? photoFile;
     try {
-      const { folder: resolvedFolder } = await uploadDirect(photoFile, article.trim(), folder, setUploadProgress);
+      const { folder: resolvedFolder } = await uploadDirect(fileToUpload, article.trim(), folder, setUploadProgress);
       setUploadedFolder(resolvedFolder);
       queryClient.invalidateQueries({ queryKey: getGetArticlePhotosQueryKey(article) });
       setStep('success');
@@ -119,22 +171,26 @@ export default function Home() {
     }
   };
 
-  const resetToArticle = () => {
-    setArticle('');
+  const clearPhoto = () => {
     setPhotoFile(null);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     setUploadError(null);
     setUploadProgress(0);
+    setCompressedFile(null);
+    setOriginalSize(0);
+    setCompressedSize(0);
+    setIsCompressing(false);
+  };
+
+  const resetToArticle = () => {
+    clearPhoto();
+    setArticle('');
     setStep('article');
   };
 
   const resetToGallery = () => {
-    setPhotoFile(null);
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl(null);
-    setUploadError(null);
-    setUploadProgress(0);
+    clearPhoto();
     setStep('gallery');
   };
 
@@ -353,7 +409,7 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="flex-1 bg-black rounded-3xl overflow-hidden shadow-2xl mb-6 relative">
+              <div className="flex-1 bg-black rounded-3xl overflow-hidden shadow-2xl mb-3 relative">
                 <img 
                   src={previewUrl} 
                   alt="Preview" 
@@ -377,6 +433,29 @@ export default function Home() {
                 )}
               </div>
 
+              {/* Compression badge */}
+              <div className="flex items-center justify-center mb-4 min-h-[28px]">
+                {isCompressing && (
+                  <span className="flex items-center gap-2 text-sm text-stone-500">
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Сжимаю фото…
+                  </span>
+                )}
+                {!isCompressing && compressedSize > 0 && (
+                  <motion.span
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex items-center gap-2 text-sm font-medium bg-green-50 text-green-700 border border-green-200 rounded-full px-3 py-1"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    {formatBytes(originalSize)} → {formatBytes(compressedSize)}
+                    <span className="text-green-500 font-bold">
+                      −{Math.round((1 - compressedSize / originalSize) * 100)}%
+                    </span>
+                  </motion.span>
+                )}
+              </div>
+
               <div className="flex gap-4 mt-auto pb-4">
                 <Button 
                   variant="secondary" 
@@ -391,7 +470,7 @@ export default function Home() {
                   size="xl" 
                   onClick={handleUpload}
                   className="flex-[2] gap-3"
-                  disabled={step === 'uploading'}
+                  disabled={step === 'uploading' || isCompressing}
                 >
                   <Upload className="w-6 h-6" />
                   Загрузить
